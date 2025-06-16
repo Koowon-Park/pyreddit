@@ -2,6 +2,9 @@
 
 import json
 import mechanize
+import base64
+import requests
+from urllib.parse import urlencode
 
 vote_url = 'http://www.reddit.com/api/vote/'
 vote_post_string = 'id=%s&dir=%s&r=%s&uh=%s'
@@ -66,6 +69,7 @@ class RedditComment(RedditThing):
             children = self._data.get("replies", {}).get("data", {}).get("children", [])
         except:
             # add logging
+            print(e)
             return []
         replies = []
 
@@ -181,7 +185,7 @@ class RedditSubredditList(RedditListing):
 
 class RedditSubreddit(RedditListing):
 
-    _url = "http://www.reddit.com/r/%s%s/.json"
+    _url = "https://oauth.reddit.com/r/%s%s/.json"
     
     def __init__(self, subreddit, json_data, reddit_agent=None, ordering=None):
 
@@ -204,15 +208,15 @@ class RedditSubreddit(RedditListing):
 
 class RedditThread(RedditThing):
 
-    _url = "http://www.reddit.com/r/%s/comments/%s.json"
+    _url = "https://oauth.reddit.com/r/%s/comments/%s.json"
 
     def __init__(self, name, json_data, reddit_agent=None):
 
         self.name = name
-        self._kind = json_data[1]['kind']
+        self._kind = json_data.get("kind", "t1")
         self._replies = None
 
-        post_data = json_data[0].get('data', {}).get('children')[0]
+        post_data = json_data[1]['data']['children'][0]
         self.post = RedditPost(post_data, reddit_agent)
 
         self._reply_data = json_data[1]['data']['children']
@@ -271,7 +275,7 @@ class RedditThread(RedditThing):
 
 class RedditUserInfo(RedditThing):
 
-    _url = "http://www.reddit.com/user/%s/about.json"
+    _url = "https://oauth.reddit.com/api/v1/user/%s/about"
 
     def __init__(self, json_data, reddit_agent=None):
 
@@ -279,12 +283,12 @@ class RedditUserInfo(RedditThing):
         super(RedditUserInfo, self).__init__(json_data, reddit_agent)
 
     def __unicode__(self):
-        return u"RedditUserInfo<%s> %s" % (self.id, self.name)
+        return u"RedditUserInfo<%s>" % (self.name)
 
 
 class RedditUserPage(RedditListing):
 
-    _url = "http://www.reddit.com/user/%s.json"
+    _url = "https://oauth.reddit.com/user/%s.json"
     
     def __init__(self, username, json_data, reddit_agent=None, section=None):
 
@@ -368,7 +372,7 @@ class RedditUserPage(RedditListing):
             return self._agent.get_user_page(self.username, after=last_item_name)
         except Exception as e:
             #add logging?
-            print e
+            print(e)
             return None
 
     def __unicode__(self):
@@ -380,66 +384,111 @@ class RedditSession(object):
     _opener = None
     _username = 'a_test_account'
     _password = 'a_test_password'
+    _client_id = None
+    _client_secret = None
 
-    _login_url = 'http://www.reddit.com/api/login/'
-    _login_post_string = 'user=%s&passwd=%s&api_type=json'
+    _login_url = 'https://www.reddit.com/api/v1/access_token'
     
-    #_subreddit_url = 'http://www.reddit.com/r/%s.json'
-
     _last_modhash = ''
-    
+
     def __init__(self, **kwargs):
-        #self._opener = kwargs.get('opener',None)
+        self._username = str(kwargs.get('user', RedditSession._username))
+        self._password = str(kwargs.get('passwd', RedditSession._password))
+        self._client_id = str(kwargs.get('client_id', RedditSession._client_id))
+        self._client_secret = str(kwargs.get('client_secret', RedditSession._client_secret))
+        
+        if not self._client_id or not self._client_secret:
+            raise Exception("Reddit API 클라이언트 ID와 시크릿이 필요합니다.")
 
-        self._username = unicode(kwargs.get('user', RedditSession._username))
-        self._passwd = unicode(kwargs.get('passwd', RedditSession._password))
-        self._cookies = mechanize.CookieJar()
-        self._opener = mechanize.build_opener(mechanize.HTTPCookieProcessor(self._cookies))
-
+        self._opener = mechanize.Browser()
+        self._opener.set_handle_robots(False)
+        self._access_token = None
         self._do_login()
-    
+
     def _do_login(self):
-
-        post_data = RedditSession._login_post_string % (self._username, self._passwd)
-
-        login_response = self.make_request(RedditSession._login_url, post_data, reqtype="login")
-
-        self._login_response = login_response
-
-        self.login_status = "Valid"
-
-    def is_logged_in(self):
-        return hasattr(self, "_login_modhash") and self._login_modhash != "" and self.login_modhash != None
+        try:
+            print(f"로그인 시도: {self._username}")
+            print(f"클라이언트 ID: {self._client_id}")
+            
+            # Basic 인증 헤더 생성
+            auth = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
+            headers = {
+                'User-Agent': 'MyRedditApp/1.0 (by /u/sidaein)',
+                'Authorization': f'Basic {auth}',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+            
+            # POST 데이터 준비
+            data = {
+                'grant_type': 'password',
+                'username': self._username,
+                'password': self._password,
+                'scope': 'read identity'
+            }
+            
+            print(f"요청 URL: {self._login_url}")
+            print(f"요청 헤더: {headers}")
+            print(f"POST 데이터: {data}")
+            
+            # requests를 사용하여 로그인 요청
+            response = requests.post(
+                self._login_url,
+                headers=headers,
+                data=urlencode(data),
+                timeout=30
+            )
+            
+            print(f"응답 상태 코드: {response.status_code}")
+            print(f"응답 헤더: {response.headers}")
+            print(f"응답 데이터: {response.text}")
+            
+            if response.status_code == 200:
+                login_response = response.json()
+                if 'access_token' in login_response:
+                    self._access_token = login_response['access_token']
+                    self._opener.addheaders = [
+                        ('User-Agent', 'MyRedditApp/1.0 (by /u/sidaein)'),
+                        ('Authorization', f'Bearer {self._access_token}')
+                    ]
+                    print("로그인 성공!")
+                else:
+                    error_msg = login_response.get('error', '알 수 없는 오류')
+                    raise Exception(f"액세스 토큰을 받지 못했습니다: {error_msg}")
+            else:
+                error_msg = response.json().get('error', '알 수 없는 오류')
+                raise Exception(f"로그인 실패: {error_msg}")
+                
+        except Exception as e:
+            print(f"로그인 중 에러 발생: {str(e)}")
+            raise
 
     def make_request(self, url, post=None, reqtype=None):
-        
-        if post:
-            response = self._opener.open(url, post)
-        else:
-            response = self._opener.open(url)
-        
-        json_data = json.load(response)
-
-        if json_data:
-            self._last_modhash = self.extract_modhash(json_data, reqtype=reqtype)
-            self._last_response = json_data
-        
-        return json_data
-
-    def extract_modhash(self, json_data, reqtype=None):
-        
-        if reqtype == None:
-            #meh
-            pass
-        elif reqtype == "login":
-            modhash = json_data.get('json', {}).get('data', {}).get('modhash', None)
-            self._login_modhash = modhash
-            return modhash
-        elif reqtype == "user_page":
-            return json_data.get('data', {}).get('modhash', None)
+        try:
+            print(f"요청 URL: {url}")
+            print(f"요청 헤더: {self._opener.addheaders}")
+            
+            # requests를 사용하여 API 요청
+            headers = dict(self._opener.addheaders)
+            if post:
+                print(f"POST 데이터: {post}")
+                response = requests.post(url, headers=headers, data=post)
+            else:
+                response = requests.get(url, headers=headers)
+            
+            print(f"응답 상태 코드: {response.status_code}")
+            print(f"응답 데이터: {response.text}")
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise Exception(f"API 요청 실패: {response.status_code} - {response.text}")
+                
+        except Exception as e:
+            print(f"요청 중 에러 발생: {str(e)}")
+            raise
 
     def __unicode__(self):
-        return u"RedditSession<%s> %s" % (self._login_modhash, self._username)
+        return u"RedditSession<%s> %s" % (self._access_token, self._username)
 
 
 class RedditAgent(object):
@@ -454,7 +503,7 @@ class RedditAgent(object):
 
     def set_vote(self, name, subreddit, direction):
         
-        modhash = self._session._login_modhash
+        modhash = self._session._access_token
         vote_request = vote_post_string % (name, direction, subreddit, modhash)
         vote_response = self._session.make_request(vote_url, vote_request, reqtype="vote")
 
@@ -486,7 +535,7 @@ class RedditAgent(object):
         if after:
             url = "%s%s" % (url, "?after=%s" % after)
         
-        print url
+        print(url)
         data = self._session.make_request(url, reqtype="subreddit_listing")
 
         if data:
@@ -553,22 +602,46 @@ class RedditAgent(object):
             return self.get_user_info(self.username)
 
 
-class RedditUser(RedditAgent):
+class RedditUser(RedditSession):
 
-    def __init__(self, username, password):
+    def __init__(self, **kwargs):
+        super(RedditUser, self).__init__(**kwargs)
+        self._user_url = 'https://oauth.reddit.com/user/%s/about.json'
+        self._user_info = self.make_request(self._user_url % self._username)
+        self._last_modhash = self._user_info['data']['modhash']
+        self.username = self._username
         self.upvotees = {}
         self.downvotees = {}
         self.recent_scans = {}
-        super(RedditUser, self).__init__(RedditSession(user=username, passwd=password))
 
-    def __unicode__(self):
-        return self._session._username
+    def get_my_user_info(self):
+        """현재 로그인한 사용자의 정보를 반환합니다."""
+        try:
+            response = self.make_request(self._user_url % self._username)
+            if response and 'data' in response:
+                return UserInfo(response['data'])
+            raise Exception("사용자 정보를 가져오는데 실패했습니다.")
+        except Exception as e:
+            print(f"사용자 정보 조회 중 에러 발생: {str(e)}")
+            raise
+
+    def get_subreddit(self, subreddit_name):
+        """서브레딧 정보를 가져옵니다."""
+        try:
+            url = f'https://oauth.reddit.com/r/{subreddit_name}/hot.json'
+            response = self.make_request(url)
+            if response and 'data' in response:
+                return Subreddit(response['data'], self)
+            raise Exception("서브레딧 정보를 가져오는데 실패했습니다.")
+        except Exception as e:
+            print(f"서브레딧 정보 조회 중 에러 발생: {str(e)}")
+            raise
 
     def add_upvotee(self, username=None, userobj=None):
-        self.upvotees[username] = None
+        pass
 
     def add_downvotee(self, username=None, userobj=None):
-        self.downvotees[username] = None
+        pass
 
     def scan_user_for_unvoted_items(self, username=None, limit=5, posts=True, comments=True):
 
@@ -584,10 +657,10 @@ class RedditUser(RedditAgent):
         page_number = 0
         while user_page and page_number < limit:
             pages.append(user_page)
-            print "current page: %s" % (user_page)
+            print("current page: %s" % (user_page))
             user_page = user_page.get_next_page()
             page_number = page_number + 1
-            print "page#: %s limit: %s" % (page_number, limit)
+            print("page#: %s limit: %s" % (page_number, limit))
     
         unvoted_comments = []
         unvoted_posts = []
@@ -607,3 +680,55 @@ class RedditUser(RedditAgent):
         self.recent_scans[username] = (unvoted_comments, unvoted_posts)
 
         return  items
+
+
+class UserInfo:
+    """Reddit 사용자 정보를 담는 클래스"""
+    def __init__(self, data):
+        self.name = data.get('name', '')
+        self.created_utc = data.get('created_utc', 0)
+        self.link_karma = data.get('link_karma', 0)
+        self.comment_karma = data.get('comment_karma', 0)
+        self.total_karma = data.get('total_karma', 0)
+        self.is_gold = data.get('is_gold', False)
+        self.is_mod = data.get('is_mod', False)
+        self.has_verified_email = data.get('has_verified_email', False)
+        self.id = data.get('id', '')
+        self.over_18 = data.get('over_18', False)
+        self.icon_img = data.get('icon_img', '')
+        self.pref_nightmode = data.get('pref_nightmode', False)
+        self.inbox_count = data.get('inbox_count', 0)
+        self.has_subscribed = data.get('has_subscribed', False)
+
+
+class Subreddit:
+    """Reddit 서브레딧 정보를 담는 클래스"""
+    def __init__(self, data, reddit_session):
+        self.data = data
+        self.reddit = reddit_session
+        self.children = data.get('children', [])
+        self.after = data.get('after')
+        self.before = data.get('before')
+
+    def get_posts(self, limit=10):
+        """서브레딧의 게시글을 가져옵니다."""
+        posts = []
+        for child in self.children[:limit]:
+            post_data = child.get('data', {})
+            posts.append(Post(post_data))
+        return posts
+
+
+class Post:
+    """Reddit 게시글 정보를 담는 클래스"""
+    def __init__(self, data):
+        self.title = data.get('title', '')
+        self.author = data.get('author', '')
+        self.score = data.get('score', 0)
+        self.num_comments = data.get('num_comments', 0)
+        self.url = data.get('url', '')
+        self.permalink = data.get('permalink', '')
+        self.created_utc = data.get('created_utc', 0)
+        self.selftext = data.get('selftext', '')
+        self.id = data.get('id', '')
+        self.subreddit = data.get('subreddit', '')

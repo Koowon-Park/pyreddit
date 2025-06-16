@@ -18,12 +18,12 @@ class SampleRedditCrawler(object):
         page = self.agent.get_subreddit(subreddit,after=after)
         usernames = {} if  usernames == None else usernames
         while page_number < page_limit and page:
-            print "Processing Page #%s" % page_number
+            print("Processing Page #%s" % page_number)
             for post in page.get_posts():
                 self.pool.spawn(self.scan_thread_for_usernames,post=post,usernames=usernames)
                 
             page_number = page_number+1
-            print "Found %s usernames so far" % len(usernames)
+            print("Found %s usernames so far" % len(usernames))
             try:
                 page = page.get_next_page()
             except:
@@ -57,5 +57,5 @@ class SampleRedditCrawler(object):
                 except:
                     usernames[reply.author]=None
                 added_count = added_count + 1
-        print "\t+%s from %s" % (added_count,post.title)
+        print("\t+%s from %s" % (added_count,post.title))
         return usernames
