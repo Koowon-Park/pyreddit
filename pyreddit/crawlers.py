@@ -39,7 +39,7 @@ class SampleRedditCrawler(object):
         added_count = 0
         if thread.author not in usernames:
             try:
-                #print "requesting info 1 %s" % (thread.author)
+                #print("requesting info 1 %s" % (thread.author))
                 user_info = self.agent.get_user_info(thread.author)
                 usernames[thread.author]=user_info
             except:
@@ -51,7 +51,7 @@ class SampleRedditCrawler(object):
         for reply in thread.get_all_replies():
             if reply.author not in usernames:
                 try:
-                    #print "requesting info `` %s" % (reply.author)
+                    #print("requesting info `` %s" % (reply.author))
                     user_info = self.agent.get_user_info(reply.author)
                     usernames[reply.author]=user_info
                 except:
